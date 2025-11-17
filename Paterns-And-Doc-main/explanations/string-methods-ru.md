@@ -450,7 +450,7 @@ string formatted = value.ToString().PadLeft(4, '0'); // "0042"
 - Для кастомной логики сравнения
 
 **Примеры:**
-
+//
 ```csharp
 string str1 = "apple";
 string str2 = "banana";
