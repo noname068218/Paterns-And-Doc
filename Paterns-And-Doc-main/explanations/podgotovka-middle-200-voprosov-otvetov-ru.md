@@ -225,7 +225,7 @@ public class Dog : Animal
 | Поля | может иметь | нет (кроме static) |
 | Множественное наследование | нет | да |
 | Назначение | общая база для иерархии | контракт, абстракция поведения |
-
+wx
 ---
 
 ### 19. Что такое полиморфизм?
@@ -896,13 +896,419 @@ var required = serviceProvider.GetRequiredService<IMyService>(); // T, throws if
 
 ---
 
-### 58. Принципы SOLID — кратко?
+### 58. Принципы SOLID — подробно с примерами
 
-- **S** — Single Responsibility: один класс — одна ответственность
-- **O** — Open/Closed: открыто для расширения, закрыто для модификации
-- **L** — Liskov Substitution: подтипы должны заменять базовый тип
-- **I** — Interface Segregation: небольшие специализированные интерфейсы
-- **D** — Dependency Inversion: зависимость от абстракций, не от конкретики
+SOLID — пять принципов объектно-ориентированного проектирования, помогающих писать поддерживаемый, расширяемый и тестируемый код.
+
+---
+
+#### SRP — Single Responsibility Principle (Принцип единственной ответственности)
+
+**Суть:** Один класс должен иметь только одну причину для изменения. Одна ответственность = одна зона изменений.
+
+**Почему важно:** Если класс делает несколько несвязанных вещей, любое изменение в одной области затрагивает весь класс. Это усложняет тестирование, увеличивает риск регрессий и затрудняет понимание кода.
+
+**Пример нарушения:**
+
+```csharp
+/// <summary>
+/// BAD: Class violates SRP — handles order logic, persistence, and email notification.
+/// Any change in order rules, DB, or email format forces modification of this class.
+/// </summary>
+public class OrderService
+{
+    public void ProcessOrder(Order order)
+    {
+        // Responsibility 1: Business logic
+        if (order.Total < 0)
+            throw new ArgumentException("Invalid order total");
+        order.Status = OrderStatus.Processing;
+
+        // Responsibility 2: Persistence (DB access)
+        using var connection = new SqlConnection("ConnectionString");
+        connection.Open();
+        var cmd = connection.CreateCommand();
+        cmd.CommandText = "INSERT INTO Orders (...) VALUES (...)";
+        cmd.ExecuteNonQuery();
+
+        // Responsibility 3: Email notification
+        var smtp = new SmtpClient("smtp.server.com");
+        smtp.Send("orders@shop.com", order.CustomerEmail,
+            "Order confirmed", $"Your order #{order.Id} is processing");
+    }
+}
+```
+
+**Правильный вариант:**
+
+```csharp
+/// <summary>
+/// Handles only order business logic. Delegates persistence and notifications.
+/// </summary>
+public class OrderProcessor
+{
+    private readonly IOrderRepository _repository;
+    private readonly INotificationService _notification;
+
+    public OrderProcessor(IOrderRepository repository, INotificationService notification)
+    {
+        _repository = repository;
+        _notification = notification;
+    }
+
+    public void ProcessOrder(Order order)
+    {
+        if (order.Total < 0)
+            throw new ArgumentException("Invalid order total");
+        order.Status = OrderStatus.Processing;
+
+        _repository.Save(order);
+        _notification.SendOrderConfirmation(order);
+    }
+}
+
+/// <summary>
+/// Single responsibility: data persistence.
+/// </summary>
+public interface IOrderRepository
+{
+    void Save(Order order);
+}
+
+/// <summary>
+/// Single responsibility: sending notifications.
+/// </summary>
+public interface INotificationService
+{
+    void SendOrderConfirmation(Order order);
+}
+```
+
+---
+
+#### OCP — Open/Closed Principle (Принцип открытости/закрытости)
+
+**Суть:** Классы должны быть открыты для расширения, но закрыты для модификации. Добавлять новое поведение нужно через новые классы/наследование, а не через правку существующего кода.
+
+**Почему важно:** Модификация работающего кода — источник багов. Расширение через новые сущности снижает риск сломать уже работающую логику.
+
+**Пример нарушения:**
+
+```csharp
+/// <summary>
+/// BAD: Adding new discount type requires modifying this class (switch/case).
+/// Violates OCP — class is not closed for modification.
+/// </summary>
+public class PriceCalculator
+{
+    public decimal Calculate(decimal price, string discountType)
+    {
+        switch (discountType)
+        {
+            case "Percentage":
+                return price * 0.9m;
+            case "Fixed":
+                return price - 50;
+            case "Seasonal":  // New type — had to MODIFY existing code
+                return price * 0.85m;
+            default:
+                return price;
+        }
+    }
+}
+```
+
+**Правильный вариант:**
+
+```csharp
+/// <summary>
+/// Strategy interface — new discount types extend via new classes, no modification.
+/// </summary>
+public interface IDiscountStrategy
+{
+    decimal Apply(decimal price);
+}
+
+public class PercentageDiscount : IDiscountStrategy
+{
+    private readonly decimal _percent;
+    public PercentageDiscount(decimal percent) => _percent = percent;
+    public decimal Apply(decimal price) => price * (1 - _percent / 100);
+}
+
+public class FixedAmountDiscount : IDiscountStrategy
+{
+    private readonly decimal _amount;
+    public FixedAmountDiscount(decimal amount) => _amount = amount;
+    public decimal Apply(decimal price) => Math.Max(0, price - _amount);
+}
+
+public class SeasonalDiscount : IDiscountStrategy
+{
+    public decimal Apply(decimal price) => price * 0.85m;
+}
+
+/// <summary>
+/// Open for extension (new strategies), closed for modification.
+/// </summary>
+public class PriceCalculator
+{
+    private readonly IDiscountStrategy _discount;
+
+    public PriceCalculator(IDiscountStrategy discount) => _discount = discount;
+
+    public decimal Calculate(decimal price) => _discount.Apply(price);
+}
+```
+
+---
+
+#### LSP — Liskov Substitution Principle (Принцип подстановки Барбары Лисков)
+
+**Суть:** Подтипы должны быть заменяемы своими базовыми типами без нарушения корректности программы. Поведение наследника не должно противоречить контракту базового типа.
+
+**Почему важно:** Нарушение LSP приводит к неожиданным ошибкам при подстановке реализаций. Код, рассчитанный на базовый тип, ломается при работе с наследником.
+
+**Пример нарушения:**
+
+```csharp
+/// <summary>
+/// BAD: Square "is-a" Rectangle in math, but substitutability breaks.
+/// Setting Width on Square also changes Height — caller expects Rectangle behavior.
+/// </summary>
+public class Rectangle
+{
+    public virtual int Width { get; set; }
+    public virtual int Height { get; set; }
+    public int Area => Width * Height;
+}
+
+public class Square : Rectangle
+{
+    public override int Width
+    {
+        set { base.Width = base.Height = value; }  // Violates LSP!
+    }
+    public override int Height
+    {
+        set { base.Width = base.Height = value; }  // Caller expects independent Width/Height
+    }
+}
+
+// Usage breaks expectations:
+// Rectangle r = new Square();
+// r.Width = 4; r.Height = 5;  // Expect Area = 20, but get 25 (Square overrides both)
+```
+
+**Правильный вариант:**
+
+```csharp
+/// <summary>
+/// Base abstraction — both Rectangle and Square implement it correctly.
+/// No substitutability violation: each type has consistent behavior.
+/// </summary>
+public interface IShape
+{
+    int Area { get; }
+}
+
+public class Rectangle : IShape
+{
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public int Area => Width * Height;
+}
+
+public class Square : IShape
+{
+    public int Side { get; set; }
+    public int Area => Side * Side;
+}
+
+// Usage: work with IShape, no unexpected behavior
+public int ComputeTotalArea(IEnumerable<IShape> shapes) =>
+    shapes.Sum(s => s.Area);
+```
+
+---
+
+#### ISP — Interface Segregation Principle (Принцип разделения интерфейса)
+
+**Суть:** Клиенты не должны зависеть от интерфейсов, которые они не используют. Лучше много маленьких специализированных интерфейсов, чем один «толстый».
+
+**Почему важно:** «Толстый» интерфейс заставляет реализации предоставлять методы-заглушки или выбрасывать исключения. Клиенты получают зависимости от ненужного API.
+
+**Пример нарушения:**
+
+```csharp
+/// <summary>
+/// BAD: Fat interface — printer must implement scan/fax even if it only prints.
+/// Violates ISP — clients forced to depend on unused methods.
+/// </summary>
+public interface IMultiFunctionDevice
+{
+    void Print(Document doc);
+    void Scan(Document doc);
+    void Fax(Document doc);
+}
+
+public class SimplePrinter : IMultiFunctionDevice
+{
+    public void Print(Document doc) { /* OK */ }
+    public void Scan(Document doc) => throw new NotSupportedException();  // Stub!
+    public void Fax(Document doc) => throw new NotSupportedException();   // Stub!
+}
+
+// Client that only needs printing still depends on Scan/Fax
+public class ReportGenerator
+{
+    private readonly IMultiFunctionDevice _device;
+    public ReportGenerator(IMultiFunctionDevice device) => _device = device;
+    public void PrintReport() => _device.Print(new Document());  // Only uses Print
+}
+```
+
+**Правильный вариант:**
+
+```csharp
+/// <summary>
+/// Segregated interfaces — clients depend only on what they use.
+/// </summary>
+public interface IPrinter
+{
+    void Print(Document doc);
+}
+
+public interface IScanner
+{
+    void Scan(Document doc);
+}
+
+public interface IFax
+{
+    void Fax(Document doc);
+}
+
+public class SimplePrinter : IPrinter
+{
+    public void Print(Document doc) { /* Only what it can do */ }
+}
+
+public class MultiFunctionMachine : IPrinter, IScanner, IFax
+{
+    public void Print(Document doc) { }
+    public void Scan(Document doc) { }
+    public void Fax(Document doc) { }
+}
+
+// Client depends only on IPrinter
+public class ReportGenerator
+{
+    private readonly IPrinter _printer;
+    public ReportGenerator(IPrinter printer) => _printer = printer;
+    public void PrintReport() => _printer.Print(new Document());
+}
+```
+
+---
+
+#### DIP — Dependency Inversion Principle (Принцип инверсии зависимостей)
+
+**Суть:** Модули верхнего уровня не должны зависеть от модулей нижнего уровня. Оба должны зависеть от абстракций. Абстракции не должны зависеть от деталей — детали зависят от абстракций.
+
+**Почему важно:** Прямая зависимость от конкретных классов (SqlConnection, SmtpClient, FileSystem) делает код жёстко связанным, сложным для тестирования и замены реализаций.
+
+**Пример нарушения:**
+
+```csharp
+/// <summary>
+/// BAD: High-level service directly depends on low-level concrete classes.
+/// Cannot unit test without real DB and email server.
+/// </summary>
+public class UserRegistrationService
+{
+    public void Register(string email, string password)
+    {
+        var validator = new EmailValidator();  // Concrete dependency
+        if (!validator.IsValid(email))
+            throw new ArgumentException("Invalid email");
+
+        using var db = new SqlConnection("Server=...");  // Concrete DB
+        db.Open();
+        // ... insert user
+
+        var smtp = new SmtpClient("smtp.gmail.com");   // Concrete email
+        smtp.Send(/* ... */);
+    }
+}
+```
+
+**Правильный вариант:**
+
+```csharp
+/// <summary>
+/// Abstractions — high-level module depends on these, not on concrete implementations.
+/// </summary>
+public interface IEmailValidator
+{
+    bool IsValid(string email);
+}
+
+public interface IUserRepository
+{
+    void Save(User user);
+}
+
+public interface IEmailSender
+{
+    void Send(string to, string subject, string body);
+}
+
+/// <summary>
+/// High-level logic depends on abstractions. Concrete implementations injected from outside.
+/// Easy to test with mocks, easy to swap DB/email provider.
+/// </summary>
+public class UserRegistrationService
+{
+    private readonly IEmailValidator _validator;
+    private readonly IUserRepository _repository;
+    private readonly IEmailSender _emailSender;
+
+    public UserRegistrationService(
+        IEmailValidator validator,
+        IUserRepository repository,
+        IEmailSender emailSender)
+    {
+        _validator = validator;
+        _repository = repository;
+        _emailSender = emailSender;
+    }
+
+    public void Register(string email, string password)
+    {
+        if (!_validator.IsValid(email))
+            throw new ArgumentException("Invalid email");
+
+        var user = new User { Email = email, PasswordHash = Hash(password) };
+        _repository.Save(user);
+        _emailSender.Send(email, "Welcome", "Your account has been created.");
+    }
+
+    private static string Hash(string password) => /* ... */;
+}
+```
+
+---
+
+#### Краткая сводка SOLID
+
+| Принцип | Суть | Ключевая идея |
+|---------|------|----------------|
+| **SRP** | Один класс — одна ответственность | Разделяй зоны изменений |
+| **OCP** | Открыт для расширения, закрыт для модификации | Расширяй через новые классы |
+| **LSP** | Подтипы заменяют базовый тип без сюрпризов | Поведение наследника согласовано с контрактом |
+| **ISP** | Маленькие специализированные интерфейсы | Не зависеть от неиспользуемого API |
+| **DIP** | Зависимость от абстракций | Инжектируй интерфейсы, не конкретные классы |
 
 ---
 
