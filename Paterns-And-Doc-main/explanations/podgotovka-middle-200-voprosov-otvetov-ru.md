@@ -2031,7 +2031,86 @@ Worker живёт как **Singleton**. Нельзя инжектить **Scoped
 
 ### 97. SignalR — что это?
 
-Библиотека для real-time коммуникации (WebSockets, long polling). Сервер может отправлять сообщения клиентам. Удобно для чатов, уведомлений, дашбордов.
+**SignalR** — библиотека ASP.NET Core для **двусторонней real-time коммуникации** между сервером и клиентами. Сервер может в любой момент отправить данные подключённым клиентам без ожидания запроса (push-модель). Клиенты подключаются к **Hub** и вызывают методы на сервере; сервер вызывает методы на клиентах по соединению, группе или всем.
+
+**Транспорты (в порядке предпочтения при согласовании):**
+
+- **WebSockets** — полноценный двусторонний канал, один постоянный TCP-соединение.
+- **Server-Sent Events (SSE)** — сервер → клиент; клиент использует обычный HTTP для отправки.
+- **Long Polling** — клиент периодически держит открытый запрос; когда серверу есть что отправить, запрос завершается с данными и клиент сразу делает следующий. Работает везде, но менее эффективен.
+
+SignalR сам выбирает лучший доступный транспорт; при необходимости можно ограничить транспорт в конфигурации.
+
+**Основные концепции:**
+
+- **Hub** — класс на сервере, наследник `Hub`. Клиенты вызывают методы Hub; методы Hub могут вызывать методы на клиентах (`Clients.Caller`, `Clients.All`, `Clients.Group(...)`, `Clients.User(...)`).
+- **ConnectionId** — уникальный идентификатор соединения. Можно привязывать пользователя к connectionId при входе (например, через `Context.User` при использовании аутентификации).
+- **Groups** — клиенты подписываются на группы (`Groups.AddToGroupAsync`); рассылка по группе: `Clients.Group("Room1").SendAsync(...)`.
+
+**Пример Hub на сервере (ASP.NET Core):**
+
+```csharp
+// NuGet: Microsoft.AspNetCore.SignalR
+public class ChatHub : Hub
+{
+    // Клиент вызывает SendMessage → сервер шлёт сообщение всем в группе
+    public async Task SendMessage(string groupName, string user, string message)
+    {
+        await Clients.Group(groupName).SendAsync("ReceiveMessage", user, message);
+    }
+
+    // Подключение клиента к группе (комнате чата)
+    public async Task JoinGroup(string groupName)
+    {
+        await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
+    }
+
+    public async Task LeaveGroup(string groupName)
+    {
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, groupName);
+    }
+}
+```
+
+**Регистрация в Program.cs:**
+
+```csharp
+builder.Services.AddSignalR();
+// ...
+app.MapHub<ChatHub>("/hubs/chat");
+```
+
+**Пример клиента (JavaScript в браузере):**
+
+```javascript
+const connection = new signalR.HubConnectionBuilder()
+  .withUrl("/hubs/chat")
+  .withAutomaticReconnect()
+  .build();
+
+// Слушаем метод, который вызывает сервер
+connection.on("ReceiveMessage", (user, message) => {
+  console.log(`${user}: ${message}`);
+});
+
+await connection.start();
+await connection.invoke("JoinGroup", "Room1");
+await connection.invoke("SendMessage", "Room1", "Alice", "Hello!");
+```
+
+**Типичные сценарии:**
+
+- Чаты, коллаборативные редакторы.
+- Уведомления (новый заказ, статус задачи).
+- Дашборды с обновлением графиков в реальном времени.
+- Игры, голосования, онлайн-статусы.
+
+**Важно на собеседовании:**
+
+- Отличие от обычного REST: клиент не опрашивает сервер; сервер сам шлёт данные при событиях.
+- Масштабирование: при нескольких серверах нужен **backplane** (например, Redis или Azure SignalR Service), чтобы сообщения доходили до клиентов, подключённых к другому узлу.
+- Аутентификация: обычно через cookie/JWT при установке соединения; на Hub доступен `Context.User`.
+- `WithAutomaticReconnect()` на клиенте — встроенное переподключение при обрыве.
 
 ---
 
@@ -2057,6 +2136,351 @@ Worker живёт как **Singleton**. Нельзя инжектить **Scoped
 
 ## БЛОК 5: SQL Server
 
+Блок посвящён SQL Server и общим темам SQL на собеседованиях: ключи, JOIN, индексы, транзакции, оптимизация, а также **частым практическим задачам** (дубликаты, топ-N, вторая максимальная зарплата, ROW_NUMBER/RANK, разница WHERE/HAVING и т.д.) с примерами кода.
+
+---
+
+### Частые темы на собеседовании (с примерами SQL)
+
+Ниже — темы, которые встречаются в ~80% SQL-вопросов, с готовыми примерами запросов.
+
+---
+
+#### WHERE vs HAVING
+
+| | WHERE | HAVING |
+|---|--------|--------|
+| **Когда выполняется** | До группировки (фильтрация строк) | После группировки (фильтрация групп) |
+| **С чем можно использовать** | Любые столбцы и выражения | Только агрегаты (COUNT, SUM, AVG…) и столбцы из GROUP BY |
+| **Типичное использование** | Отсечь строки до группировки | Отсечь группы по условию на агрегат |
+
+**Пример:** вывести отделы, в которых средняя зарплата больше 50 000.
+
+```sql
+-- HAVING: фильтр по результату агрегации (после GROUP BY)
+SELECT DepartmentId, AVG(Salary) AS AvgSalary
+FROM Employees
+GROUP BY DepartmentId
+HAVING AVG(Salary) > 50000;
+
+-- WHERE: отфильтровать строки до группировки (например, только активные сотрудники)
+SELECT DepartmentId, AVG(Salary) AS AvgSalary
+FROM Employees
+WHERE IsActive = 1
+GROUP BY DepartmentId
+HAVING AVG(Salary) > 50000;
+```
+
+---
+
+#### Что делает GROUP BY?
+
+`GROUP BY` объединяет строки с одинаковыми значениями указанных столбцов и позволяет считать по ним агрегаты (COUNT, SUM, AVG, MIN, MAX). В SELECT можно указывать только столбцы из GROUP BY и агрегатные функции.
+
+**Пример:** количество сотрудников и сумма зарплат по отделам.
+
+```sql
+SELECT DepartmentId,
+       COUNT(*) AS EmployeeCount,
+       SUM(Salary) AS TotalSalary,
+       AVG(Salary) AS AvgSalary
+FROM Employees
+GROUP BY DepartmentId;
+```
+
+---
+
+#### ROW_NUMBER, RANK, DENSE_RANK (с примерами)
+
+Окно задаётся через `OVER (PARTITION BY ... ORDER BY ...)`.
+
+- **ROW_NUMBER()** — уникальный порядковый номер строки в рамках партиции (при равенстве ORDER BY номера всё равно разные).
+- **RANK()** — ранг с «дырами»: при равных значениях один ранг, следующий ранг пропускается (1, 2, 2, 4).
+- **DENSE_RANK()** — ранг без пропусков (1, 2, 2, 3).
+
+**Пример:** нумерация и ранги по зарплате внутри отдела.
+
+```sql
+SELECT Id, Name, DepartmentId, Salary,
+       ROW_NUMBER() OVER (PARTITION BY DepartmentId ORDER BY Salary DESC) AS RowNum,
+       RANK()       OVER (PARTITION BY DepartmentId ORDER BY Salary DESC) AS RankVal,
+       DENSE_RANK() OVER (PARTITION BY DepartmentId ORDER BY Salary DESC) AS DenseRankVal
+FROM Employees;
+```
+
+---
+
+#### Разница между DELETE и TRUNCATE (с примерами)
+
+| | DELETE | TRUNCATE |
+|---|--------|----------|
+| **Условие** | Можно с WHERE (выборочное удаление) | Только вся таблица |
+| **Логирование** | Каждая строка в логе транзакций | Минимальное (освобождение страниц) |
+| **IDENTITY** | Не сбрасывается | Сбрасывается до seed |
+| **Триггеры** | Вызываются | Не вызываются |
+| **FK** | Можно при наличии FK на другие таблицы | Часто не допускается при FK |
+
+```sql
+-- DELETE: удалить только строки, удовлетворяющие условию; можно откатить в транзакции
+BEGIN TRANSACTION;
+DELETE FROM Employees WHERE DepartmentId = 5;
+-- ROLLBACK; -- откат
+COMMIT;
+
+-- TRUNCATE: удалить все строки таблицы, сброс IDENTITY, быстрее
+TRUNCATE TABLE LogArchive;
+```
+
+---
+
+#### Subquery (подзапрос)
+
+Подзапрос — запрос внутри другого запроса. Может использоваться в SELECT, FROM, WHERE, HAVING. Должен возвращать скаляр (одно значение) или таблицу в зависимости от контекста.
+
+```sql
+-- Скалярный подзапрос в WHERE: сотрудники с зарплатой выше средней
+SELECT * FROM Employees
+WHERE Salary > (SELECT AVG(Salary) FROM Employees);
+
+-- Подзапрос в FROM (производная таблица)
+SELECT DeptId, Cnt
+FROM (SELECT DepartmentId AS DeptId, COUNT(*) AS Cnt FROM Employees GROUP BY DepartmentId) AS T
+WHERE Cnt > 10;
+
+-- Подзапрос с EXISTS (часто эффективнее IN на больших наборах)
+SELECT * FROM Orders o
+WHERE EXISTS (SELECT 1 FROM OrderDetails d WHERE d.OrderId = o.Id AND d.Quantity > 5);
+```
+
+---
+
+#### Transaction и ACID
+
+**Транзакция** — группа операций, выполняемая как одно целое: либо все изменения применяются (COMMIT), либо все откатываются (ROLLBACK).
+
+**ACID:**
+
+- **Atomicity** — все операции в транзакции выполняются или ни одна.
+- **Consistency** — БД переходит из одного согласованного состояния в другое.
+- **Isolation** — параллельные транзакции не «видят» незакоммиченные изменения друг друга так, чтобы нарушить согласованность.
+- **Durability** — после COMMIT изменения сохраняются даже при сбое.
+
+```sql
+BEGIN TRANSACTION;
+  UPDATE Accounts SET Balance = Balance - 100 WHERE Id = 1;
+  UPDATE Accounts SET Balance = Balance + 100 WHERE Id = 2;
+  -- Если что-то пошло не так:
+  -- ROLLBACK;
+COMMIT;
+```
+
+---
+
+#### View (представление)
+
+**View** — сохранённый запрос, который ведёт себя как виртуальная таблица. Удобно для упрощения доступа и сокрытия сложности. Индексированное представление (materialized view) в SQL Server хранит данные физически.
+
+```sql
+CREATE VIEW v_EmployeeSummary AS
+SELECT DepartmentId,
+       COUNT(*) AS EmployeeCount,
+       AVG(Salary) AS AvgSalary
+FROM Employees
+GROUP BY DepartmentId;
+
+-- Использование
+SELECT * FROM v_EmployeeSummary WHERE AvgSalary > 50000;
+```
+
+---
+
+#### Trigger (триггер)
+
+**Триггер** — код, выполняемый автоматически при INSERT/UPDATE/DELETE. Используется для аудита, каскадных изменений, бизнес-правил. Может усложнять отладку и влиять на производительность.
+
+```sql
+-- Пример: запись в таблицу аудита при обновлении зарплаты
+CREATE TRIGGER tr_Employees_AuditSalary
+ON Employees
+AFTER UPDATE
+AS
+  IF UPDATE(Salary)
+  INSERT INTO SalaryAudit (EmployeeId, OldSalary, NewSalary, ChangedAt)
+  SELECT d.Id, d.Salary, i.Salary, GETUTCDATE()
+  FROM deleted d
+  INNER JOIN inserted i ON d.Id = i.Id;
+```
+
+---
+
+#### Нормализация
+
+**Нормализация** — разбиение таблиц для уменьшения дублирования и аномалий обновления/удаления. Степени: 1NF (атомарность, уникальность строк), 2NF (зависимость неключевых атрибутов от полного ключа), 3NF (нет транзитивных зависимостей), BCNF и далее. Для производительности иногда применяют денормализацию.
+
+---
+
+### Практические задачи с примерами SQL
+
+Ниже — типовые задачи на собеседованиях с готовыми решениями.
+
+---
+
+#### 1. Найти дубликаты
+
+Найти значения колонки (или комбинации колонок), которые встречаются больше одного раза.
+
+```sql
+-- Дубликаты по одному полю (например, Email)
+SELECT Email, COUNT(*) AS Cnt
+FROM Users
+GROUP BY Email
+HAVING COUNT(*) > 1;
+
+-- Получить все строки-дубликаты (все строки с повторяющимся Email)
+SELECT * FROM Users u
+WHERE u.Email IN (
+  SELECT Email FROM Users GROUP BY Email HAVING COUNT(*) > 1
+);
+
+-- Вариант через ROW_NUMBER: оставить один «образец», остальные считать дубликатами
+SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY Email ORDER BY Id) AS rn
+  FROM Users
+) t
+WHERE rn > 1;
+```
+
+---
+
+#### 2. Найти вторую максимальную зарплату
+
+```sql
+-- Через подзапрос и MAX
+SELECT MAX(Salary) AS SecondMaxSalary
+FROM Employees
+WHERE Salary < (SELECT MAX(Salary) FROM Employees);
+
+-- Через DENSE_RANK (вторая по величине с учётом возможных равенств)
+SELECT Salary AS SecondMaxSalary
+FROM (
+  SELECT Salary, DENSE_RANK() OVER (ORDER BY Salary DESC) AS dr
+  FROM (SELECT DISTINCT Salary FROM Employees) s
+) t
+WHERE dr = 2;
+
+-- Через OFFSET/FETCH (SQL Server 2012+): вторая строка после сортировки по убыванию
+SELECT DISTINCT Salary
+FROM Employees
+ORDER BY Salary DESC
+OFFSET 1 ROWS FETCH NEXT 1 ROWS ONLY;
+```
+
+---
+
+#### 3. Найти последнюю запись
+
+«Последняя» обычно по дате или по максимальному Id.
+
+```sql
+-- Последняя по Id
+SELECT TOP 1 * FROM Orders ORDER BY Id DESC;
+
+-- Последняя по дате по каждой группе (например, последний заказ клиента)
+SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY CustomerId ORDER BY OrderDate DESC) AS rn
+  FROM Orders
+) t
+WHERE rn = 1;
+
+-- Через подзапрос: строки, у которых Id равен максимуму в своей группе
+SELECT o.* FROM Orders o
+INNER JOIN (
+  SELECT CustomerId, MAX(OrderDate) AS LastDate FROM Orders GROUP BY CustomerId
+) last ON o.CustomerId = last.CustomerId AND o.OrderDate = last.LastDate;
+```
+
+---
+
+#### 4. Найти топ-N записей (например, топ-3)
+
+```sql
+-- Топ-3 сотрудника по зарплате по всей компании
+SELECT TOP 3 * FROM Employees ORDER BY Salary DESC;
+
+-- Топ-3 по зарплате в каждом отделе (через ROW_NUMBER)
+SELECT * FROM (
+  SELECT *,
+         ROW_NUMBER() OVER (PARTITION BY DepartmentId ORDER BY Salary DESC) AS rn
+  FROM Employees
+) t
+WHERE rn <= 3;
+
+-- Топ-3 через OFFSET/FETCH
+SELECT * FROM Employees
+ORDER BY Salary DESC
+OFFSET 0 ROWS FETCH NEXT 3 ROWS ONLY;
+```
+
+---
+
+#### 5. Использовать ROW_NUMBER
+
+Типичные сценарии: дедупликация (оставить одну запись на группу), пагинация, нумерация.
+
+```sql
+-- Оставить по одной записи на пользователя (с наибольшим Id)
+DELETE FROM DuplicateLog
+WHERE Id NOT IN (
+  SELECT Id FROM (
+    SELECT Id, ROW_NUMBER() OVER (PARTITION BY UserId ORDER BY Id DESC) AS rn
+    FROM DuplicateLog
+  ) t
+  WHERE rn = 1
+);
+
+-- Пагинация: вторая страница по 10 записей
+SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (ORDER BY CreatedAt DESC) AS rn
+  FROM Products
+) t
+WHERE rn > 10 AND rn <= 20;
+```
+
+---
+
+#### 6. JOIN — все основные типы с примерами
+
+Пусть есть таблицы `Employees (Id, Name, DepartmentId)` и `Departments (Id, Name)`.
+
+```sql
+-- INNER JOIN — только сотрудники, у которых есть отдел (совпадение с обеих сторон)
+SELECT e.Name, d.Name AS DepartmentName
+FROM Employees e
+INNER JOIN Departments d ON e.DepartmentId = d.Id;
+
+-- LEFT JOIN — все сотрудники; если отдела нет, справа NULL
+SELECT e.Name, d.Name AS DepartmentName
+FROM Employees e
+LEFT JOIN Departments d ON e.DepartmentId = d.Id;
+
+-- RIGHT JOIN — все отделы; сотрудники без отдела не попадут, отделы без сотрудников — попадут
+SELECT e.Name, d.Name AS DepartmentName
+FROM Employees e
+RIGHT JOIN Departments d ON e.DepartmentId = d.Id;
+
+-- FULL OUTER JOIN — все сотрудники и все отделы; при отсутствии связи — NULL
+SELECT e.Name, d.Name AS DepartmentName
+FROM Employees e
+FULL OUTER JOIN Departments d ON e.DepartmentId = d.Id;
+
+-- CROSS JOIN — каждая строка слева с каждой справа (декартово произведение)
+SELECT e.Name, d.Name AS DepartmentName
+FROM Employees e
+CROSS JOIN Departments d;
+```
+
+---
+
 ### 101. Primary Key и Foreign Key?
 
 **Primary Key** — уникальный идентификатор строки, NOT NULL, обычно один на таблицу.
@@ -2067,11 +2491,13 @@ Worker живёт как **Singleton**. Нельзя инжектить **Scoped
 
 ### 102. Типы JOIN?
 
-- **INNER JOIN** — только совпадающие строки
-- **LEFT JOIN** — все строки слева + совпадения справа
-- **RIGHT JOIN** — все строки справа + совпадения слева
-- **FULL OUTER JOIN** — все строки с обеих сторон
-- **CROSS JOIN** — декартово произведение
+- **INNER JOIN** — только совпадающие строки с обеих таблиц.
+- **LEFT JOIN** — все строки слева + совпадения справа (справа NULL при отсутствии совпадения).
+- **RIGHT JOIN** — все строки справа + совпадения слева.
+- **FULL OUTER JOIN** — все строки с обеих сторон (NULL там, где нет пары).
+- **CROSS JOIN** — декартово произведение (каждая строка первой таблицы с каждой второй).
+
+Готовые примеры запросов по всем типам JOIN см. в разделе **«Практические задачи» → «6. JOIN»** выше в этом блоке.
 
 ---
 
@@ -2149,7 +2575,7 @@ SELECT * FROM Sales;
 
 ### 112. Что такое подзапрос (subquery)?
 
-Запрос внутри другого запроса. Может быть в SELECT, FROM, WHERE. Должен возвращать одно значение (скаляр) или таблицу, в зависимости от контекста.
+Запрос внутри другого запроса. Может использоваться в SELECT, FROM, WHERE, HAVING. Возвращает скаляр (одно значение) или таблицу в зависимости от контекста. Примеры скалярного подзапроса, производной таблицы и EXISTS см. в разделе **«Subquery (подзапрос)»** выше в этом блоке.
 
 ---
 
@@ -2180,8 +2606,8 @@ SELECT * FROM Sales;
 
 ### 117. Разница между DELETE и TRUNCATE?
 
-**DELETE** — удаляет строки по условию, пишет в лог, можно откатить в транзакции.  
-**TRUNCATE** — удаляет все строки, сбрасывает счётчик идентичности, быстрее, почти не логирует построчно.
+**DELETE** — удаляет строки по условию (WHERE), пишет каждую строку в лог транзакций, можно откатить в транзакции, вызываются триггеры.  
+**TRUNCATE** — удаляет все строки таблицы, сбрасывает IDENTITY, быстрее, почти не логирует построчно, триггеры не вызываются. Сравнительная таблица и примеры кода см. в разделе **«Разница между DELETE и TRUNCATE»** выше в этом блоке.
 
 ---
 
@@ -2199,10 +2625,13 @@ SELECT * FROM Sales;
 
 ### 120. Что такое ROW_NUMBER, RANK, DENSE_RANK?
 
-Ранжирующие функции:
-- **ROW_NUMBER** — уникальный номер строки
-- **RANK** — ранг с пропусками при равенстве
-- **DENSE_RANK** — ранг без пропусков при равенстве
+Ранжирующие оконные функции (задают окно через `OVER (PARTITION BY ... ORDER BY ...)`):
+
+- **ROW_NUMBER()** — уникальный порядковый номер строки в партиции; при равных значениях ORDER BY номера всё равно разные (1, 2, 3, 4).
+- **RANK()** — ранг с пропусками: при равенстве один ранг, следующий пропускается (1, 2, 2, 4).
+- **DENSE_RANK()** — ранг без пропусков (1, 2, 2, 3).
+
+Используются для топ-N по группе, дедупликации, «вторая максимальная зарплата» и т.п. Примеры синтаксиса и запросов см. в разделах **«ROW_NUMBER, RANK, DENSE_RANK»** и **«Практические задачи» (п. 4, 5)** выше в этом блоке.
 
 ---
 
