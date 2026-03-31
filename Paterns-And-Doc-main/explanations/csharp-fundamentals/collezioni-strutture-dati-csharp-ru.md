@@ -1519,7 +1519,274 @@ Console.WriteLine(set.Count); // 3 уникальных элемента
 
 ---
 
-## 16. Часто задаваемые вопросы (FAQ)
+## 16. Шаблоны и техники алгоритмов (Algorithm Patterns)
+
+Этот раздел описывает **типичные структуры данных и приёмы**, которые часто встречаются в задачах на алгоритмы и собеседованиях. Для каждого подхода указаны сложность, когда его использовать и готовые шаблоны кода на C#.
+
+---
+
+### 16.1. PriorityQueue&lt;TElement, TPriority&gt; — куча с приоритетами
+
+**Сложность:** Enqueue / Dequeue — **O(log n)**. Peek — **O(1)**.
+
+В .NET 6+ `PriorityQueue<TElement, TPriority>` реализован как **min-heap**: при извлечении через `Dequeue()` всегда получаем элемент с **минимальным** приоритетом. Для «максимального первым» можно использовать отрицательный приоритет или кастомный компаратор.
+
+#### Когда использовать
+
+| Задача | Зачем нужна куча |
+|--------|-------------------|
+| **Top-K наибольших/наименьших** | Храним только K элементов, лишние выкидываем через Dequeue — остаётся K-й по величине/минимум. |
+| **Всегда быстро брать минимум** | Min-heap даёт минимум за O(1) (Peek), обновление кучи за O(log n). |
+| **Merge K отсортированных списков** | В куче храним по одному текущему элементу от каждого списка, извлекаем минимум и подставляем следующий из того же списка. |
+| **Алгоритм Дейкстры** | Обрабатываем вершины в порядке возрастания расстояния; куча по расстоянию даёт следующую вершину за O(log n). |
+
+#### Базовое использование
+
+```csharp
+// .NET 6+ — min-heap по умолчанию (минимальный приоритет извлекается первым)
+var pq = new PriorityQueue<int, int>();
+
+pq.Enqueue(element: 10, priority: 10);  // add
+pq.Enqueue(element: 5, priority: 5);
+pq.Enqueue(element: 20, priority: 20);
+
+int min = pq.Dequeue();   // 5  — элемент с минимальным приоритетом
+int next = pq.Peek();    // 10 — посмотреть следующий минимум без извлечения
+```
+
+#### Пример: Top-K наибольших (K-й по величине элемент)
+
+Идея: храним в min-heap ровно **K** наибольших элементов. Для каждого числа добавляем его в кучу; если размер стал больше K — извлекаем минимум (он точно не входит в Top-K). В конце на вершине кучи — K-й наибольший элемент.
+
+```csharp
+int FindKthLargest(int[] nums, int k) {
+    var pq = new PriorityQueue<int, int>();  // min-heap by value
+
+    foreach (int n in nums) {
+        pq.Enqueue(n, n);
+        if (pq.Count > k)
+            pq.Dequeue();  // remove smallest, keep only k largest
+    }
+    return pq.Peek();  // k-th largest is at the top of min-heap of size k
+}
+```
+
+**Сложность:** O(n log K) по времени, O(K) по памяти.
+
+#### Связь с другими темами
+
+- **Heap** — структура данных под капотом (двоичная куча).
+- **Top-K** — классическая задача для приоритетной очереди.
+- **Dijkstra** — кратчайший путь в графе с неотрицательными весами.
+- **Merge K sorted lists** — слияние K отсортированных последовательностей за O(N log K).
+
+---
+
+### 16.2. Массив и List&lt;T&gt; для DP, prefix sum и счётчиков
+
+**Сложность:** доступ по индексу **get/set — O(1)**.
+
+Массив `int[]` и `List<T>` с доступом по индексу — основа для таблиц динамического программирования, префиксных сумм и счётчиков частот.
+
+#### Когда использовать
+
+| Приём | Назначение |
+|-------|------------|
+| **DP-таблица** | `dp[i]` — ответ для подзадачи размера i (например, число способов, минимальная стоимость). |
+| **Prefix sum** | `pre[i]` — сумма элементов `arr[0..i-1]`; сумма на отрезке `[l..r]` = `pre[r+1] - pre[l]`. |
+| **Счётчики частот** | `freq[c]` для символов/цифр (индекс — код символа или цифра). |
+| **Two Pointers** | Два индекса `left`, `right` на одном отсортированном массиве — поиск пары, тройки и т.д. |
+
+#### DP: пример Climbing Stairs
+
+```csharp
+// dp[i] = number of ways to reach step i
+int ClimbStairs(int n) {
+    if (n <= 1) return 1;
+    int[] dp = new int[n + 1];
+    dp[0] = 1;
+    dp[1] = 1;
+    for (int i = 2; i <= n; i++)
+        dp[i] = dp[i - 1] + dp[i - 2];
+    return dp[n];
+}
+```
+
+#### Prefix Sum
+
+```csharp
+// pre[i] = sum of nums[0..i-1]; sum of [l..r] = pre[r+1] - pre[l]
+int[] BuildPrefixSum(int[] nums) {
+    int n = nums.Length;
+    int[] pre = new int[n + 1];
+    for (int i = 0; i < n; i++)
+        pre[i + 1] = pre[i] + nums[i];
+    return pre;
+}
+
+int RangeSum(int[] pre, int left, int right) {
+    return pre[right + 1] - pre[left];
+}
+```
+
+#### Счётчики частот (буквы/цифры)
+
+```csharp
+// Frequency of each character in string
+int[] freq = new int[128];  // or 256 for extended ASCII
+foreach (char c in s)
+    freq[c]++;
+
+// Frequency of digits 0..9
+int[] digitCount = new int[10];
+foreach (char c in numString)
+    digitCount[c - '0']++;
+```
+
+---
+
+### 16.3. Two Pointers (два указателя)
+
+**Сложность:** один проход — **O(n)**.
+
+Два индекса `left` и `right` двигаются по массиву (часто по отсортированному). Используется для поиска пары с заданной суммой, удаления дубликатов, проверки палиндрома и т.д.
+
+#### Когда использовать
+
+- Отсортированный массив: найти пару с суммой K.
+- In-place операции: сдвинуть нули в конец, удалить дубликаты.
+- Палиндром: два указателя с концов к центру.
+
+#### Шаблон: пара с суммой K (массив отсортирован)
+
+```csharp
+bool HasPairWithSum(int[] nums, int target) {
+    int left = 0, right = nums.Length - 1;
+    while (left < right) {
+        int sum = nums[left] + nums[right];
+        if (sum == target) return true;
+        if (sum < target) left++;
+        else right--;
+    }
+    return false;
+}
+```
+
+---
+
+### 16.4. Sliding Window (скользящее окно) + Dictionary
+
+**Сложность:** один проход — **O(n)**.
+
+Окно — подмассив `[left..right]`. Словарь хранит состояние окна (частоты символов, счётчики). Правый указатель расширяет окно, левый сужает, когда условие нарушено.
+
+#### Когда использовать
+
+- Самая длинная подстрока без повторяющихся символов.
+- Минимальное окно, содержащее все символы из набора.
+- Подмассив с максимальной суммой длины K (или с фиксированным K — без словаря, просто окно фиксированного размера).
+
+#### Шаблон: подстрока без повторов
+
+```csharp
+int LengthOfLongestSubstring(string s) {
+    int left = 0, maxLen = 0;
+    var window = new Dictionary<char, int>();
+
+    for (int right = 0; right < s.Length; right++) {
+        char c = s[right];
+        window[c] = window.GetValueOrDefault(c, 0) + 1;
+
+        // Shrink window until no duplicate in window
+        while (window[c] > 1) {
+            window[s[left]]--;
+            left++;
+        }
+        maxLen = Math.Max(maxLen, right - left + 1);
+    }
+    return maxLen;
+}
+```
+
+---
+
+### 16.5. Рекурсия: шаблон для деревьев и графов
+
+**Сложность:** зависит от задачи (обычно O(n) по числу узлов/вершин).
+
+Для обхода дерева и графа рекурсия — естественный способ: базовый случай (null или лист), рекурсивные вызовы для поддеревьев/соседей, затем объединение результатов.
+
+#### Когда использовать
+
+- Задачи на дереве: высота, сумма, проверка свойств.
+- DFS на графе.
+- Divide and Conquer (merge sort, quick sort).
+- Перебор: перестановки, комбинации (backtracking).
+
+#### Шаблон: DFS по дереву
+
+```csharp
+// Example: max depth of binary tree
+int Dfs(TreeNode node) {
+    // 1. Base case — always first
+    if (node == null) return 0;
+
+    // 2. Recurse into children
+    int left  = Dfs(node.left);
+    int right = Dfs(node.right);
+
+    // 3. Compute result and return
+    return Math.Max(left, right) + 1;
+}
+```
+
+Тот же подход применим к обходу графа (посещённые вершины хранить в `HashSet` или массиве).
+
+---
+
+### 16.6. Binary Search (бинарный поиск)
+
+**Сложность:** **O(log n)**.
+
+Ищем в отсортированном массиве или по монотонному условию (binary search по ответу). Важно корректно вычислять `mid`, чтобы не было переполнения.
+
+#### Когда использовать
+
+- Отсортированный массив: найти элемент или границу (первый ≥ X, последний ≤ X).
+- Задачи вида «минимизировать максимум» или «максимизировать минимум» — бинарный поиск по ответу.
+
+#### Классический бинарный поиск
+
+```csharp
+int BinarySearch(int[] nums, int target) {
+    int lo = 0, hi = nums.Length - 1;
+    while (lo <= hi) {
+        // Avoid overflow: do not use (lo + hi) / 2
+        int mid = lo + (hi - lo) / 2;
+        if (nums[mid] == target) return mid;
+        if (nums[mid] < target) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return -1;
+}
+```
+
+**Правило:** `mid = lo + (hi - lo) / 2` — всегда так, чтобы избежать переполнения при больших `lo` и `hi`.
+
+#### Сводная таблица техник
+
+| Техника | Сложность | Типичные задачи |
+|---------|-----------|------------------|
+| **PriorityQueue** | Enqueue/Dequeue O(log n) | Top-K, Dijkstra, Merge K lists |
+| **int[] / List для DP** | get/set O(1) | DP, prefix sum, counting |
+| **Two Pointers** | O(n) | Пара с суммой, палиндром, in-place |
+| **Sliding Window + Dict** | O(n) | Подстрока без повторов, минимальное окно |
+| **Рекурсия (DFS)** | O(n) по узлам | Деревья, графы, backtracking |
+| **Binary Search** | O(log n) | Поиск в отсортированном, поиск по ответу |
+
+---
+
+## 17. Часто задаваемые вопросы (FAQ)
 
 ### Q1: Когда использовать List, а когда LinkedList?
 

@@ -808,12 +808,12 @@ string conn = Database.GetConnectionString();  // Chiama il costruttore statico 
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Persona p = new Persona("Mario", 30);                     │
+│  Persona p = new Persona("Mario", 30);                      │
 └─────────────────────────────────────────────────────────────┘
                             │
                             ▼
         ┌───────────────────────────────────────┐
-        │  FASE 1: Allocazione Memoria         │
+        │  FASE 1: Allocazione Memoria          │
         │  - Alloca spazio nello HEAP           │
         │  - Tutti i campi = null/0             │
         └───────────────────────────────────────┘
@@ -828,8 +828,8 @@ string conn = Database.GetConnectionString();  // Chiama il costruttore statico 
                             ▼
         ┌───────────────────────────────────────┐
         │  FASE 3: Costruttore Base             │
-        │  - Se classe deriva da altra           │
-        │  - Chiama base() o this()              │
+        │  - Se classe deriva da altra          │
+        │  - Chiama base() o this()             │
         └───────────────────────────────────────┘
                             │
                             ▼
