@@ -1848,6 +1848,109 @@ public string Name { get; set; }
 
 ---
 
+### Замыкания (closures) в C# — подробный разбор
+
+> **Замыкание** — ситуация, когда анонимная функция (лямбда, анонимный делегат, локальная функция с захватом) «запоминает» переменные **внешней** области видимости и может читать/менять их уже **после** выхода из метода, где эти переменные объявлены. На собесе часто спрашивают: что выведет код, как компилятор это реализует, классическая ошибка с циклом.
+
+#### Интуиция
+
+Представь метод, внутри которого есть `int x = 1` и лямбда `() => x + 1`. Лямбда **не копирует** значение `x` на момент создания (если речь о «переменной», а не о параметре по значению в другом смысле): она привязана к **самой переменной** (для value type — к **месту хранения**, которое компилятор оформляет как поле вспомогательного класса). Поэтому если до **вызова** лямбды изменить `x`, результат изменится.
+
+#### Как это делает компилятор C#
+
+Для лямбд и анонимных методов, которые захватывают локальные переменные или `this`, компилятор генерирует **вложенный закрытый класс** (иногда называют *display class* / *closure class*) с полями под каждую захваченную переменную и методом, в котором живёт тело лямбды. Твой «локальный» `x` превращается в поле этого класса; несколько лямбд в одном методе часто **делят один и тот же** экземпляр этого класса, если захватывают одни и те же переменные.
+
+**Зачем знать на Middle:** объяснить, почему замыкание **удлиняет жизнь** захваченных объектов для GC и почему в циклах легко получить «все делегаты видят последнее значение».
+
+#### Захват по ссылке на переменную (не «снимок» значения)
+
+```csharp
+void ExampleDeferredRead()
+{
+    var fs = new List<Func<int>>();
+    int x = 0;
+    // The lambda captures the variable x, not the value 0 at this moment.
+    fs.Add(() => x);
+    x = 10;
+    Console.WriteLine(fs[0]()); // Prints 10 — reads current x
+}
+```
+
+#### Классическая ловушка: цикл `for` и одна общая переменная
+
+В C# переменная `i` в `for (int i = 0; …)` — **одна** на весь цикл. Все лямбды, созданные в теле, захватывают **одну и ту же** `i`. Когда позже вызываешь делегаты, цикл уже закончился и `i` равно значению **после** выхода из цикла (например, 3).
+
+```csharp
+// Classic pitfall: every delegate prints the same final value of i
+var actions = new List<Action>();
+for (int i = 0; i < 3; i++)
+{
+    actions.Add(() => Console.WriteLine(i));
+}
+
+foreach (var a in actions)
+    a(); // Typical output: 3, 3, 3
+```
+
+**Исправление:** завести **новую локальную переменную внутри итерации** (она будет своим полем / своим слотом в display class на каждый виток, логически — отдельный capture на каждый шаг):
+
+```csharp
+var actions = new List<Action>();
+for (int i = 0; i < 3; i++)
+{
+    int captured = i; // fresh variable per iteration — each lambda closes over its own captured
+    actions.Add(() => Console.WriteLine(captured));
+}
+```
+
+#### `foreach` и версии языка
+
+В **C# 5 и новее** переменная итерации `foreach` объявляется так, что на **каждую итерацию** получается **новая** переменная — лямбды внутри `foreach` ведут себя интуитивно. В старых версиях C# была та же проблема, что и с `for` (одна переменная на весь цикл) — на собесе иногда упоминают для истории.
+
+#### Отложенное выполнение LINQ и замыкания
+
+Если запрос LINQ **не материализован** (`ToList` ещё не вызывали), делегаты фильтрации/проекции будут выполняться **позже**, при перечислении, и увидят **текущие** значения захваченных переменных:
+
+```csharp
+var list = new List<int> { 1, 2, 3 };
+int threshold = 2;
+var q = list.Where(x => x > threshold); // query built; nothing enumerated yet
+threshold = 0;
+Console.WriteLine(string.Join(", ", q.ToList())); // May include more elements — threshold is 0 now
+```
+
+Если нужен «снимок» на момент построения запроса — скопируй значение в локальную переменную **до** создания цепочки или материализуй сразу.
+
+#### Захват `this` и неочевидные удержания памяти
+
+Лямбда в методе экземпляра может неявно вызывать методы/поля объекта — тогда захватывается **`this`**. Долгоживущий делегат (подписка на событие, `Timer`, кэш колбэков) может **удерживать весь объект** от сборки мусора. На Middle стоит уметь сказать: «отписаться от события / отменить таймер / не хранить вечно ссылку на делегат».
+
+#### Локальные функции
+
+Локальная функция *может* захватывать локальные переменные внешнего метода — по смыслу это тот же механизм замыкания. Иногда локальные функции читаются проще, чем лямбды, и их удобнее рекурсировать (без `Func`/`delegate` с самоназначением).
+
+#### Многопоточность (кратко)
+
+Если несколько потоков вызывают делегаты, которые читают/пишут **одну** захваченную переменную без синхронизации, получаются те же гонки, что и с обычным общим полом. Замыкание само по себе потокобезопасным не делает.
+
+#### Формулировки «для ответа устно»
+
+1. **Что такое замыкание?** — функция, которая использует переменные из внешней области; компилятор переносит их в сгенерированный класс; переменная живёт, пока жив делегат.
+2. **Почему в цикле все лямбды печатают одно число?** — одна переменная счётчика на все итерации; решение — локальная копия внутри тела цикла.
+3. **Связь с LINQ?** — отложенное выполнение + захват переменных → запрос может «измениться» до перечисления.
+
+#### Краткая шпаргалка
+
+| Тема | Суть |
+|------|------|
+| Семантика | Захват **переменной**, не «снимка» значения (для изменяемых данных — актуальное состояние) |
+| `for` | Одна переменная цикла → часто одно значение во всех лямбдах |
+| Исправление | `int copy = i;` внутри итерации |
+| LINQ | До `ToList`/`foreach` условие может увидеть новые значения outer locals |
+| Память | Долгий life делегата → дольше живут захваченные объекты |
+
+---
+
 ## БЛОК 4: ASP.NET Core / Web API
 
 ### 71. Что такое MVC?
@@ -3735,6 +3838,253 @@ app.UseExceptionHandler(errorApp =>
     });
 });
 ```
+
+---
+
+## БЛОК 11A: Live-задачи (как на реальном собесе)
+
+> Этот блок дополняет теоретические ответы: здесь формат **«напиши код»**, **«найди ошибку»**, **«разбери код»** — то, что чаще всего проверяют на живом интервью.
+
+---
+
+### Live 1. Алгоритмы на C# (частые задачи)
+
+**Задача:** найти все значения, которые встречаются в массиве **более одного раза**, за **O(n)** по времени.
+
+**Наивно — O(n²)** (на собесе так не сдавать):
+
+```csharp
+// O(n²): repeated scans over the array
+var dupesNaive = arr.Where(x => arr.Count(y => y == x) > 1).Distinct();
+```
+
+**Правильно — O(n)** через два множества: первое «уже видели», второе «уже пометили как дубликат»:
+
+```csharp
+/// <summary>
+/// Returns distinct values that appear more than once. Time O(n), space O(n).
+/// </summary>
+public static IEnumerable<int> FindDuplicates(int[] arr)
+{
+    var seen = new HashSet<int>();
+    var dupes = new HashSet<int>();
+    foreach (var x in arr)
+    {
+        if (!seen.Add(x))
+            dupes.Add(x);
+    }
+    return dupes;
+}
+```
+
+**Задача:** развернуть строку **без** `Reverse()` / без готового `Array.Reverse` — классика two pointers.
+
+```csharp
+/// <summary>
+/// Reverses characters in place on a char array copy, then builds a new string.
+/// </summary>
+public static string ReverseString(string s)
+{
+    var chars = s.ToCharArray();
+    int l = 0, r = chars.Length - 1;
+    while (l < r)
+    {
+        // Swap ends; move pointers toward the center
+        (chars[l], chars[r]) = (chars[r], chars[l]);
+        l++;
+        r--;
+    }
+    return new string(chars);
+}
+```
+
+**Задача:** проверить, являются ли две строки **анаграммами** (одинаковый набор символов с теми же частотами).
+
+**Вариант O(n log n)** — сортировка символов (просто объяснить на доске):
+
+```csharp
+public static bool AreAnagramsBySort(string a, string b) =>
+    a.Length == b.Length &&
+    string.Concat(a.OrderBy(c => c)) == string.Concat(b.OrderBy(c => c));
+```
+
+**Вариант O(n)** — частоты в `Dictionary<char, int>` (предпочтительнее для Middle):
+
+```csharp
+public static bool AreAnagramsByFrequency(string a, string b)
+{
+    if (a.Length != b.Length)
+        return false;
+
+    var counts = new Dictionary<char, int>();
+    foreach (var c in a)
+        counts[c] = counts.GetValueOrDefault(c) + 1;
+    foreach (var c in b)
+    {
+        if (!counts.TryGetValue(c, out var n) || n == 0)
+            return false;
+        counts[c] = n - 1;
+    }
+    return true;
+}
+```
+
+**Зачем в файле:** теория «про HashSet/LINQ» не заменяет навык написать решение под ограничение **O(n)** и обсудить память.
+
+---
+
+### Live 2. Код с ошибкой — race condition
+
+**Найди проблему:** несколько потоков увеличивают счётчик; результат не гарантирован.
+
+```csharp
+public class Counter
+{
+    private int _count = 0;
+
+    public void Increment()
+    {
+        // Not atomic: read -> add -> write; another thread can interleave here.
+        _count++;
+    }
+
+    public int Get() => _count;
+}
+
+// Example: 100 parallel increments — result may be less than 100
+var c = new Counter();
+Parallel.For(0, 100, _ => c.Increment());
+Console.WriteLine(c.Get()); // e.g. 87, 93, 100 — non-deterministic
+```
+
+**Исправления:**
+
+1. **`Interlocked.Increment`** — если достаточно одного примитива «прибавить 1»:
+
+```csharp
+public void Increment() => Interlocked.Increment(ref _count);
+```
+
+2. **`lock`** — если нужна более сложная инварианта над несколькими полями:
+
+```csharp
+private readonly object _gate = new();
+
+public void Increment()
+{
+    lock (_gate)
+    {
+        _count++;
+    }
+}
+```
+
+3. **`Interlocked.Add`** — когда добавляете произвольную дельту атомарно:
+
+```csharp
+Interlocked.Add(ref _count, value);
+```
+
+---
+
+### Live 3. SQL «с листа» (классика собесов)
+
+**Топ-3 по продажам в каждой категории** — оконная функция:
+
+```sql
+SELECT *
+FROM (
+    SELECT
+        category,
+        product_name,
+        total_sales,
+        ROW_NUMBER() OVER (
+            PARTITION BY category
+            ORDER BY total_sales DESC
+        ) AS rn
+    FROM products
+) ranked
+WHERE rn <= 3;
+```
+
+**Сотрудники с зарплатой выше средней по своему отделу:**
+
+```sql
+SELECT name, department, salary
+FROM employees e
+WHERE salary > (
+    SELECT AVG(salary)
+    FROM employees
+    WHERE department = e.department
+);
+```
+
+**Дубликаты email в таблице `users`:**
+
+```sql
+SELECT email, COUNT(*) AS cnt
+FROM users
+GROUP BY email
+HAVING COUNT(*) > 1;
+```
+
+> Эти же темы разобраны в **Блоке 5 (SQL Server)** выше; здесь — компактный «шпаргалочный» набор именно под формат «напиши запрос за 5 минут».
+
+---
+
+### Live 4. Code review — найди проблемы в коде
+
+**Задание:** перечисли все проблемы (безопасность, ресурсы, многопоточность, async, производительность).
+
+```csharp
+public class UserService
+{
+    // Middle+: prefer IHttpClientFactory over long-lived static HttpClient for DNS/sockets;
+    // static field is a common interview talking point.
+    private static readonly HttpClient _client = new HttpClient();
+
+    public List<User> GetUsers()
+    {
+        var conn = new SqlConnection("Server=prod;Database=app;");
+        conn.Open();
+
+        var users = new List<User>();
+        var query = "";
+
+        foreach (var id in GetUserIds())
+        {
+            // String interpolation with raw id: SQL injection risk.
+            // Concatenating in a loop: O(n²) allocations; use parameterized batch or StringBuilder.
+            query += $"SELECT * FROM Users WHERE Id = {id};";
+        }
+
+        // ... execute query (omitted)
+
+        return users;
+        // conn never disposed: connection leak; exception before return leaks too.
+    }
+
+    public async void LoadAsync()
+    {
+        var result = await FetchDataAsync();
+        _cache = result.ToList(); // _cache updated without synchronization; data race.
+    }
+
+    private static List<User>? _cache;
+}
+```
+
+**Чек-лист ответов:**
+
+| # | Проблема | Почему это плохо | Как лучше |
+|---|-----------|-------------------|-----------|
+| 1 | `SqlConnection` без `using` / `await using` | Утечка соединений, при исключении соединение может не закрыться | `await using var conn = new SqlConnection(...);` или `try/finally` |
+| 2 | SQL из строки с `{id}` | **SQL injection**, если `id` когда-либо извне | Параметры (`SqlParameter`, EF, Dapper) |
+| 3 | `query +=` в цикле | Квадратичные аллокации | Один параметризованный запрос / `UNION ALL` / bulk / ORM |
+| 4 | Исключение до `return` | Соединение не освежается | То же, что п.1 — `using` |
+| 5 | `async void` | Исключения «теряются» вызывающему коду | `async Task LoadAsync()` |
+| 6 | Статический `_cache` без синхронизации | **Race condition** при параллельных вызовах | `lock`, `SemaphoreSlim`, `ConcurrentDictionary`, или убрать кэш из статики |
+| 7 | (Опционально) статический `HttpClient` | В старых паттернах — проблемы с DNS и пулами сокетов | `IHttpClientFactory`, именованный клиент |
 
 ---
 
